@@ -39,6 +39,12 @@
   a.port:hover { background: var(--accent); color: var(--bg); }
   .port.internal { color: var(--dim); }
   .none { color: var(--dim); }
+  .acts { white-space: nowrap; }
+  button { font: inherit; font-size: 12px; color: var(--text); background: transparent; cursor: pointer;
+           border: 1px solid var(--line); border-radius: 6px; padding: 2px 10px; margin-right: 4px; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button.stop:hover:not(:disabled) { border-color: var(--warn); color: var(--warn); }
+  button:disabled { opacity: .5; cursor: wait; }
   @media (max-width: 700px) { th:nth-child(3), td:nth-child(3) { display: none; } }
 </style>
 </head>
@@ -53,13 +59,14 @@
 </header>
 <div id="err"></div>
 <table>
-  <thead><tr><th>Container</th><th>Image</th><th>Status</th><th>Ports</th></tr></thead>
+  <thead><tr><th>Container</th><th>Image</th><th>Status</th><th>Ports</th><th></th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let data = [];
+let busy = false;  // an action is in flight; don't let the poll redraw the buttons
 
 try { $('showall').checked = localStorage.getItem('showall') === '1'; } catch {}
 $('showall').onchange = () => {
@@ -87,10 +94,32 @@ function render() {
       <td>${esc(c.image)}</td>
       <td>${esc(c.status)}</td>
       <td>${c.ports.length ? c.ports.map(portHtml).join('') : '<span class="none">none</span>'}</td>
-    </tr>`).join('') : '<tr><td colspan="4" class="none">No containers.</td></tr>';
+      <td class="acts">${c.state === 'running'
+        ? `<button class="stop" data-act="stop" data-id="${esc(c.id)}">stop</button><button data-act="restart" data-id="${esc(c.id)}">restart</button>`
+        : `<button data-act="start" data-id="${esc(c.id)}">start</button>`}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="none">No containers.</td></tr>';
 }
 
+$('rows').onclick = async e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  busy = true;
+  b.closest('td').querySelectorAll('button').forEach(x => x.disabled = true);
+  try {
+    const r = await (await fetch(`/api/containers/${b.dataset.id}/${b.dataset.act}`,
+      {method: 'POST', headers: {'X-Dashboard': '1'}})).json();
+    $('err').style.display = r.ok ? 'none' : 'block';
+    if (!r.ok) $('err').textContent = `${b.dataset.act} failed: ${r.error}`;
+  } catch (err) {
+    $('err').style.display = 'block';
+    $('err').textContent = 'Dashboard server not reachable: ' + err;
+  }
+  busy = false;
+  refresh();
+};
+
 async function refresh() {
+  if (busy) return;
   try {
     const r = await (await fetch('/api/containers', {cache: 'no-store'})).json();
     $('err').style.display = r.ok ? 'none' : 'block';

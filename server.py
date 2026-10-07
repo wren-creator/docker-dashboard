@@ -56,6 +56,18 @@ def list_containers():
     return rows
 
 
+ACTIONS = {"start", "stop", "restart"}
+ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def run_action(action, cid):
+    """Run docker start/stop/restart on a container the dashboard itself listed."""
+    if cid not in {c["id"] for c in list_containers()}:
+        return False, "unknown container"
+    p = subprocess.run([DOCKER, action, cid], capture_output=True, text=True, timeout=60)
+    return p.returncode == 0, (p.stderr or p.stdout).strip()
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype):
         self.send_response(code)
@@ -76,6 +88,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
         else:
             self._send(404, b"not found", "text/plain")
+
+    def do_POST(self):
+        # Localhost-only, but any web page can still fire requests at localhost.
+        # Require our custom header (forces a CORS preflight we never grant) and
+        # a Host we recognise (blocks DNS rebinding).
+        host = self.headers.get("Host", "").rsplit(":", 1)[0]
+        if self.headers.get("X-Dashboard") != "1" or host not in ("127.0.0.1", "localhost", "[::1]"):
+            return self._send(403, b'{"ok": false, "error": "forbidden"}', "application/json")
+        m = re.fullmatch(r"/api/containers/([0-9a-f]{12})/(\w+)", self.path)
+        if not m or m[2] not in ACTIONS:
+            return self._send(404, b'{"ok": false, "error": "not found"}', "application/json")
+        try:
+            ok, msg = run_action(m[2], m[1])
+        except Exception as e:
+            ok, msg = False, str(e)
+        self._send(200, json.dumps({"ok": ok, "error": None if ok else msg}).encode(), "application/json")
 
     def log_message(self, *args):
         pass
