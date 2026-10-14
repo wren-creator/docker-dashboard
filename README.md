@@ -7,6 +7,8 @@ One page that shows every Docker container on this Mac, its image, and its ports
 ./stop.sh
 ```
 
+On a new machine: `git clone` the repo, make sure `docker` works from your shell, and run `./start.sh`. If your docker binary isn't at `/usr/local/bin/docker`, set `DOCKER_BIN` (see Config). Needs Python 3, nothing else to install.
+
 - Published ports (`:8081 → 8081/tcp`) are clickable links to `http://localhost:<port>`.
 - Ports that are exposed but not published to the host show dimmed.
 - "show stopped" toggles exited containers.
