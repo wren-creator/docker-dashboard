@@ -25,3 +25,5 @@ Start/stop/restart go through `POST /api/containers/<id>/<action>`. Because any 
 ## Config
 
 Environment variables: `DASH_HOST` (default 127.0.0.1), `DASH_PORT` (default 9077), `DOCKER_BIN` (default /usr/local/bin/docker).
+
+**Don't set `DASH_HOST=0.0.0.0`.** There's no login. The dashboard can stop and restart containers, so anyone who can reach the port can too. The localhost-only bind is the security model. The `Host` header check also rejects any address except localhost, so exposing it to the network wouldn't work cleanly anyway. If you need remote access, put it behind an SSH tunnel (`ssh -L 9077:localhost:9077 yourhost`).
