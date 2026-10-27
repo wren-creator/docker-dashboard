@@ -8,6 +8,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -15,6 +16,7 @@ HOST = os.environ.get("DASH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DASH_PORT", "9077"))
 DOCKER = os.environ.get("DOCKER_BIN", "/usr/local/bin/docker")
 LSOF = os.environ.get("LSOF_BIN", "/usr/sbin/lsof")
+NETSTAT = os.environ.get("NETSTAT_BIN", "/usr/sbin/netstat")
 HERE = Path(__file__).parent
 
 # "0.0.0.0:8081->8081/tcp", "[::]:8081->8081/tcp", "3272/tcp", "0.0.0.0:80-81->80-81/tcp"
@@ -57,6 +59,38 @@ def list_containers():
     return rows
 
 
+_prev_bytes, _prev_lock = {}, threading.Lock()
+
+
+def port_activity():
+    """{listening port: (receiving, transmitting)} since the previous call.
+
+    macOS netstat -b reports cumulative rx/tx bytes per connection, so a port
+    is "active" when any of its established connections moved bytes since the
+    last poll. The first call has no baseline and reports nothing.
+    """
+    global _prev_bytes
+    out = subprocess.run([NETSTAT, "-anb", "-p", "tcp"], capture_output=True, text=True, timeout=10).stdout
+    now, act = {}, {}
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) < 8 or f[5] != "ESTABLISHED" or not (f[-2].isdigit() and f[-1].isdigit()):
+            continue
+        port = f[3].rpartition(".")[2]
+        if not port.isdigit():
+            continue
+        key, rx, tx = (f[3], f[4]), int(f[-2]), int(f[-1])
+        now[key] = (rx, tx)
+        with _prev_lock:
+            old = _prev_bytes.get(key)
+        if old:
+            r, t = act.get(int(port), (False, False))
+            act[int(port)] = (r or rx > old[0], t or tx > old[1])
+    with _prev_lock:
+        _prev_bytes = now
+    return act
+
+
 def list_listeners():
     """TCP ports something on this Mac is listening on, one row per port."""
     out = subprocess.run(
@@ -77,6 +111,12 @@ def list_listeners():
             local = addr in ("127.0.0.1", "[::1]", "localhost")
             row = ports.setdefault(int(port), {"port": int(port), "process": cmd, "pid": pid, "local": local})
             row["local"] = row["local"] and local  # reachable from the network on any non-loopback bind
+    try:
+        act = port_activity()
+    except (OSError, subprocess.SubprocessError):
+        act = {}
+    for p, row in ports.items():
+        row["rx"], row["tx"] = act.get(p, (False, False))
     return sorted(ports.values(), key=lambda r: r["port"])
 
 
