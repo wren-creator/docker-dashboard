@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -60,21 +59,21 @@ def list_containers():
     return rows
 
 
-HOLD = 8  # seconds a flag stays lit after the last byte moved, so short bursts are visible
-_prev_bytes, _last_seen, _prev_lock = {}, {}, threading.Lock()
+_prev_bytes, _port_state, _prev_lock = {}, {}, threading.Lock()
 
 
 def port_activity():
-    """{listening port: (receiving, transmitting)}.
+    """{listening port: (receiving, transmitting)}, held until new activity.
 
-    macOS netstat -b reports cumulative rx/tx bytes per connection, so a port
-    is "active" when any of its established connections moved bytes since the
-    previous call, and stays flagged for HOLD seconds after that. The first
-    call has no baseline and reports nothing.
+    macOS netstat -b reports cumulative rx/tx bytes per connection. When any
+    established connection to a port moved bytes since the previous call, that
+    port's state is replaced with what moved (rx, tx, or both). Quiet calls
+    leave it alone, so a flag stays lit until later traffic changes it. The
+    first call has no baseline and reports nothing.
     """
     global _prev_bytes
     out = subprocess.run([NETSTAT, "-anb", "-p", "tcp"], capture_output=True, text=True, timeout=10).stdout
-    now, t0 = {}, time.monotonic()
+    now, moved = {}, {}
     for line in out.splitlines():
         f = line.split()
         if len(f) < 8 or f[5] != "ESTABLISHED" or not (f[-2].isdigit() and f[-1].isdigit()):
@@ -87,15 +86,12 @@ def port_activity():
         with _prev_lock:
             old = _prev_bytes.get(key)
         if old:
-            with _prev_lock:
-                if rx > old[0]:
-                    _last_seen[int(port), "rx"] = t0
-                if tx > old[1]:
-                    _last_seen[int(port), "tx"] = t0
+            r, t = moved.get(int(port), (False, False))
+            moved[int(port)] = (r or rx > old[0], t or tx > old[1])
     with _prev_lock:
         _prev_bytes = now
-        return {p: tuple(t0 - _last_seen.get((p, d), -1e9) <= HOLD for d in ("rx", "tx"))
-                for p in {k[0] for k in _last_seen}}
+        _port_state.update({p: rt for p, rt in moved.items() if rt[0] or rt[1]})
+        return dict(_port_state)
 
 
 def list_listeners():
