@@ -45,6 +45,8 @@
   button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   button.stop:hover:not(:disabled) { border-color: var(--warn); color: var(--warn); }
   button:disabled { opacity: .5; cursor: wait; }
+  h2 { font-size: 15px; margin: 28px 0 10px; }
+  .net { color: var(--warn); font-size: 12px; }
   @media (max-width: 700px) { th:nth-child(3), td:nth-child(3) { display: none; } }
 </style>
 </head>
@@ -62,10 +64,16 @@
   <thead><tr><th>Container</th><th>Image</th><th>Status</th><th>Ports</th><th></th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
+<h2>Other listening ports <span class="stat" id="nother"></span></h2>
+<table>
+  <thead><tr><th>Port</th><th>Process</th><th>Reachable from</th><th></th></tr></thead>
+  <tbody id="other"></tbody>
+</table>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let data = [];
+let listeners = [];
 let busy = false;  // an action is in flight; don't let the poll redraw the buttons
 
 try { $('showall').checked = localStorage.getItem('showall') === '1'; } catch {}
@@ -100,6 +108,28 @@ function render() {
     </tr>`).join('') : '<tr><td colspan="5" class="none">No containers.</td></tr>';
 }
 
+function renderOther() {
+  // Docker's published ports are already in the table above; skip them here.
+  const dockerPorts = new Set(data.filter(c => c.state === 'running')
+    .flatMap(c => c.ports.filter(p => p.published).map(p => p.host)));
+  const rows = listeners.filter(l => !dockerPorts.has(String(l.port)));
+  $('nother').textContent = `(${rows.length})`;
+  $('other').innerHTML = rows.length ? rows.map(l => `
+    <tr>
+      <td>:${l.port}</td>
+      <td>${esc(l.process)} <span class="sub">pid ${esc(l.pid)}</span></td>
+      <td>${l.local ? 'this Mac only' : '<span class="net">all interfaces</span>'}</td>
+      <td class="acts"><a class="port" href="http://localhost:${l.port}" target="_blank" rel="noopener">open</a></td>
+    </tr>`).join('') : '<tr><td colspan="4" class="none">Nothing else listening.</td></tr>';
+}
+
+async function refreshPorts() {
+  try {
+    const r = await (await fetch('/api/ports', {cache: 'no-store'})).json();
+    if (r.ok) { listeners = r.ports; renderOther(); }
+  } catch {}
+}
+
 $('rows').onclick = async e => {
   const b = e.target.closest('button[data-act]');
   if (!b) return;
@@ -125,6 +155,7 @@ async function refresh() {
     $('err').style.display = r.ok ? 'none' : 'block';
     if (!r.ok) $('err').textContent = 'Docker not reachable: ' + r.error;
     else { data = r.containers; render(); }
+    refreshPorts();
     $('upd').textContent = 'updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     $('err').style.display = 'block';

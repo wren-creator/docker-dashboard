@@ -12,11 +12,12 @@ On a new machine: `git clone` the repo, make sure `docker` works from your shell
 - Published ports (`:8081 → 8081/tcp`) are clickable links to `http://localhost:<port>`.
 - Ports that are exposed but not published to the host show dimmed.
 - "show stopped" toggles exited containers.
+- Below the table, "Other listening ports" lists every other TCP port something on this Mac is listening on (process, pid, and whether it's loopback-only or on all interfaces), each with an **open** button to `http://localhost:<port>`. Docker's own published ports are left out since they're already above. Plenty of these aren't web servers (3270, SSH, databases), so open will only work for the HTTP ones.
 - Each row has buttons: running containers get **stop** and **restart**, stopped ones get **start**.
 
 ## How it works
 
-`server.py` is stdlib-only Python. It runs `docker ps -a` and serves JSON at `/api/containers` and the page at `/`. It binds to 127.0.0.1 only.
+`server.py` is stdlib-only Python. It runs `docker ps -a` and serves JSON at `/api/containers`, `/api/ports` (from `lsof`), and the page at `/`. It binds to 127.0.0.1 only.
 
 Start/stop/restart go through `POST /api/containers/<id>/<action>`. Because any web page can fire requests at localhost, the server only accepts POSTs that carry an `X-Dashboard: 1` header (which forces a CORS preflight it never approves) and a localhost `Host` header (blocks DNS rebinding). It also only acts on container IDs it just listed from docker.
 

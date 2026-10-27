@@ -14,6 +14,7 @@ from pathlib import Path
 HOST = os.environ.get("DASH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DASH_PORT", "9077"))
 DOCKER = os.environ.get("DOCKER_BIN", "/usr/local/bin/docker")
+LSOF = os.environ.get("LSOF_BIN", "/usr/sbin/lsof")
 HERE = Path(__file__).parent
 
 # "0.0.0.0:8081->8081/tcp", "[::]:8081->8081/tcp", "3272/tcp", "0.0.0.0:80-81->80-81/tcp"
@@ -56,6 +57,29 @@ def list_containers():
     return rows
 
 
+def list_listeners():
+    """TCP ports something on this Mac is listening on, one row per port."""
+    out = subprocess.run(
+        [LSOF, "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"],
+        capture_output=True, text=True, timeout=10,
+    ).stdout  # lsof exits 1 when nothing matches, so no check=True
+    ports, pid, cmd = {}, None, None
+    for line in out.splitlines():
+        tag, val = line[0], line[1:]
+        if tag == "p":
+            pid = val
+        elif tag == "c":  # lsof escapes odd bytes, e.g. "Code\\x20Helper"
+            cmd = re.sub(r"\\x([0-9a-f]{2})", lambda m: chr(int(m[1], 16)), val)
+        elif tag == "n":
+            addr, _, port = val.rpartition(":")
+            if not port.isdigit():
+                continue
+            local = addr in ("127.0.0.1", "[::1]", "localhost")
+            row = ports.setdefault(int(port), {"port": int(port), "process": cmd, "pid": pid, "local": local})
+            row["local"] = row["local"] and local  # reachable from the network on any non-loopback bind
+    return sorted(ports.values(), key=lambda r: r["port"])
+
+
 ACTIONS = {"start", "stop", "restart"}
 ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
@@ -83,6 +107,12 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps({"ok": True, "containers": list_containers()})
             except Exception as e:  # docker stopped, CLI missing, timeout
                 body = json.dumps({"ok": False, "error": str(e), "containers": []})
+            self._send(200, body.encode(), "application/json")
+        elif self.path == "/api/ports":
+            try:
+                body = json.dumps({"ok": True, "ports": list_listeners()})
+            except Exception as e:
+                body = json.dumps({"ok": False, "error": str(e), "ports": []})
             self._send(200, body.encode(), "application/json")
         elif self.path in ("/", "/index.html"):
             self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
