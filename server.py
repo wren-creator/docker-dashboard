@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -59,19 +60,21 @@ def list_containers():
     return rows
 
 
-_prev_bytes, _prev_lock = {}, threading.Lock()
+HOLD = 8  # seconds a flag stays lit after the last byte moved, so short bursts are visible
+_prev_bytes, _last_seen, _prev_lock = {}, {}, threading.Lock()
 
 
 def port_activity():
-    """{listening port: (receiving, transmitting)} since the previous call.
+    """{listening port: (receiving, transmitting)}.
 
     macOS netstat -b reports cumulative rx/tx bytes per connection, so a port
     is "active" when any of its established connections moved bytes since the
-    last poll. The first call has no baseline and reports nothing.
+    previous call, and stays flagged for HOLD seconds after that. The first
+    call has no baseline and reports nothing.
     """
     global _prev_bytes
     out = subprocess.run([NETSTAT, "-anb", "-p", "tcp"], capture_output=True, text=True, timeout=10).stdout
-    now, act = {}, {}
+    now, t0 = {}, time.monotonic()
     for line in out.splitlines():
         f = line.split()
         if len(f) < 8 or f[5] != "ESTABLISHED" or not (f[-2].isdigit() and f[-1].isdigit()):
@@ -84,11 +87,15 @@ def port_activity():
         with _prev_lock:
             old = _prev_bytes.get(key)
         if old:
-            r, t = act.get(int(port), (False, False))
-            act[int(port)] = (r or rx > old[0], t or tx > old[1])
+            with _prev_lock:
+                if rx > old[0]:
+                    _last_seen[int(port), "rx"] = t0
+                if tx > old[1]:
+                    _last_seen[int(port), "tx"] = t0
     with _prev_lock:
         _prev_bytes = now
-    return act
+        return {p: tuple(t0 - _last_seen.get((p, d), -1e9) <= HOLD for d in ("rx", "tx"))
+                for p in {k[0] for k in _last_seen}}
 
 
 def list_listeners():
