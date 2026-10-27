@@ -15,7 +15,13 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
-         font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 16px; }
+         font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 16px;
+         height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  .pane { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .pane + .pane { margin-top: 12px; }
+  .scroll { flex: 1; min-height: 0; overflow: auto; background: var(--panel);
+            border: 1px solid var(--line); border-radius: 8px; }
+  .scroll thead th { position: sticky; top: 0; background: var(--panel); box-shadow: 0 1px 0 var(--line); }
   header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: baseline; margin-bottom: 16px; }
   h1 { font-size: 18px; margin: 0; }
   .stat { color: var(--dim); }
@@ -23,8 +29,7 @@
   .spacer { flex: 1; }
   label { color: var(--dim); cursor: pointer; user-select: none; }
   #err { background: #4a1d1d; color: #ffb4b4; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; display: none; }
-  table { width: 100%; border-collapse: collapse; background: var(--panel);
-          border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
   tr:last-child td { border-bottom: 0; }
@@ -45,7 +50,7 @@
   button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   button.stop:hover:not(:disabled) { border-color: var(--warn); color: var(--warn); }
   button:disabled { opacity: .5; cursor: wait; }
-  h2 { font-size: 15px; margin: 28px 0 10px; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
   .net { color: var(--warn); font-size: 12px; }
   @media (max-width: 700px) { th:nth-child(3), td:nth-child(3) { display: none; } }
 </style>
@@ -60,15 +65,23 @@
   <span class="stat" id="upd">…</span>
 </header>
 <div id="err"></div>
+<section class="pane">
+<div class="scroll">
 <table>
   <thead><tr><th>Container</th><th>Image</th><th>Status</th><th>Ports</th><th></th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
+</div>
+</section>
+<section class="pane">
 <h2>Other listening ports <span class="stat" id="nother"></span></h2>
+<div class="scroll">
 <table>
   <thead><tr><th>Port</th><th>Process</th><th>Reachable from</th><th></th></tr></thead>
   <tbody id="other"></tbody>
 </table>
+</div>
+</section>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));

@@ -12,7 +12,7 @@ On a new machine: `git clone` the repo, make sure `docker` works from your shell
 - Published ports (`:8081 → 8081/tcp`) are clickable links to `http://localhost:<port>`.
 - Ports that are exposed but not published to the host show dimmed.
 - "show stopped" toggles exited containers.
-- Below the table, "Other listening ports" lists every other TCP port something on this Mac is listening on (process, pid, and whether it's loopback-only or on all interfaces), each with an **open** button to `http://localhost:<port>`. Docker's own published ports are left out since they're already above. Plenty of these aren't web servers (3270, SSH, databases), so open will only work for the HTTP ones.
+- The page is a horizontal split, containers on top and "Other listening ports" below, each pane with its own scroll bar and a sticky header. The bottom pane lists every other TCP port something on this Mac is listening on (process, pid, and whether it's loopback-only or on all interfaces), each with an **open** button to `http://localhost:<port>`. Docker's own published ports are left out since they're already above. Plenty of these aren't web servers (3270, SSH, databases), so open will only work for the HTTP ones.
 - Each row has buttons: running containers get **stop** and **restart**, stopped ones get **start**.
 
 ## How it works
