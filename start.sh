@@ -18,7 +18,8 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 # Something else may be holding the port even without a PID file
-if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+# (tries to bind it with python, so it works without lsof, e.g. bare Ubuntu)
+if ! python3 -c "import socket,sys; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(sys.argv[1])))" "$PORT" 2>/dev/null; then
     echo "Port $PORT is already in use by another process. Set DASH_PORT to pick a different one."
     exit 1
 fi

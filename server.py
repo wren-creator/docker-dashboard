@@ -7,16 +7,27 @@ the page at /. Binds to localhost so it is not exposed to the network.
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 HOST = os.environ.get("DASH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DASH_PORT", "9077"))
-DOCKER = os.environ.get("DOCKER_BIN", "/usr/local/bin/docker")
-LSOF = os.environ.get("LSOF_BIN", "/usr/sbin/lsof")
-NETSTAT = os.environ.get("NETSTAT_BIN", "/usr/sbin/netstat")
+IS_MAC = sys.platform == "darwin"
+
+
+def find_bin(env, name, *fallbacks):
+    """Env override, then PATH, then well-known locations."""
+    return os.environ.get(env) or shutil.which(name) or next((f for f in fallbacks if os.path.exists(f)), name)
+
+
+DOCKER = find_bin("DOCKER_BIN", "docker", "/usr/local/bin/docker", "/usr/bin/docker")
+LSOF = find_bin("LSOF_BIN", "lsof", "/usr/sbin/lsof", "/usr/bin/lsof")
+NETSTAT = find_bin("NETSTAT_BIN", "netstat", "/usr/sbin/netstat")
+SS = find_bin("SS_BIN", "ss", "/usr/bin/ss", "/usr/sbin/ss")
 HERE = Path(__file__).parent
 
 # "0.0.0.0:8081->8081/tcp", "[::]:8081->8081/tcp", "3272/tcp", "0.0.0.0:80-81->80-81/tcp"
@@ -62,58 +73,105 @@ def list_containers():
 _prev_bytes, _port_state, _prev_lock = {}, {}, threading.Lock()
 
 
+def connection_bytes():
+    """{(local, peer): (rx_bytes, tx_bytes)} for established TCP connections, plus {key: port}."""
+    conns = {}
+    if IS_MAC:
+        out = subprocess.run([NETSTAT, "-anb", "-p", "tcp"], capture_output=True, text=True, timeout=10).stdout
+        for line in out.splitlines():
+            f = line.split()
+            if len(f) < 8 or f[5] != "ESTABLISHED" or not (f[-2].isdigit() and f[-1].isdigit()):
+                continue
+            port = f[3].rpartition(".")[2]
+            if port.isdigit():
+                conns[(f[3], f[4])] = (int(port), int(f[-2]), int(f[-1]))
+        return conns
+    # Linux: `ss -tni` prints each connection, then an indented line of counters
+    out = subprocess.run([SS, "-tniH"], capture_output=True, text=True, timeout=10).stdout
+    cur = None
+    for line in out.splitlines():
+        f = line.split()
+        if not f:
+            continue
+        if not line[0].isspace():
+            cur = (f[3], f[4], f[3].rpartition(":")[2]) if f[0] == "ESTAB" and len(f) >= 5 else None
+        elif cur:
+            rx = re.search(r"\bbytes_received:(\d+)", line)
+            tx = re.search(r"\bbytes_sent:(\d+)", line)
+            if rx and tx and cur[2].isdigit():
+                conns[(cur[0], cur[1])] = (int(cur[2]), int(rx[1]), int(tx[1]))
+    return conns
+
+
 def port_activity():
     """{listening port: (receiving, transmitting)}, held until new activity.
 
-    macOS netstat -b reports cumulative rx/tx bytes per connection. When any
-    established connection to a port moved bytes since the previous call, that
-    port's state is replaced with what moved (rx, tx, or both). Quiet calls
-    leave it alone, so a flag stays lit until later traffic changes it. The
-    first call has no baseline and reports nothing.
+    Per-connection cumulative rx/tx byte counters (macOS netstat -b, Linux
+    ss -ti). When any established connection to a port moved bytes since the
+    previous call, that port's state is replaced with what moved (rx, tx, or
+    both). Quiet calls leave it alone, so a flag stays lit until later traffic
+    changes it. The first call has no baseline and reports nothing.
     """
     global _prev_bytes
-    out = subprocess.run([NETSTAT, "-anb", "-p", "tcp"], capture_output=True, text=True, timeout=10).stdout
     now, moved = {}, {}
-    for line in out.splitlines():
-        f = line.split()
-        if len(f) < 8 or f[5] != "ESTABLISHED" or not (f[-2].isdigit() and f[-1].isdigit()):
-            continue
-        port = f[3].rpartition(".")[2]
-        if not port.isdigit():
-            continue
-        key, rx, tx = (f[3], f[4]), int(f[-2]), int(f[-1])
+    for key, (port, rx, tx) in connection_bytes().items():
         now[key] = (rx, tx)
         with _prev_lock:
             old = _prev_bytes.get(key)
         if old:
-            r, t = moved.get(int(port), (False, False))
-            moved[int(port)] = (r or rx > old[0], t or tx > old[1])
+            r, t = moved.get(port, (False, False))
+            moved[port] = (r or rx > old[0], t or tx > old[1])
     with _prev_lock:
         _prev_bytes = now
         _port_state.update({p: rt for p, rt in moved.items() if rt[0] or rt[1]})
         return dict(_port_state)
 
 
-def list_listeners():
-    """TCP ports something on this Mac is listening on, one row per port."""
-    out = subprocess.run(
-        [LSOF, "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"],
-        capture_output=True, text=True, timeout=10,
-    ).stdout  # lsof exits 1 when nothing matches, so no check=True
-    ports, pid, cmd = {}, None, None
+def raw_listeners():
+    """[(port, process, pid, loopback_only)] for every TCP listen socket."""
+    rows = []
+    if IS_MAC or not os.path.exists(SS):
+        out = subprocess.run(
+            [LSOF, "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout  # lsof exits 1 when nothing matches, so no check=True
+        pid, cmd = None, None
+        for line in out.splitlines():
+            tag, val = line[0], line[1:]
+            if tag == "p":
+                pid = val
+            elif tag == "c":  # lsof escapes odd bytes, e.g. "Code\\x20Helper"
+                cmd = re.sub(r"\\x([0-9a-f]{2})", lambda m: chr(int(m[1], 16)), val)
+            elif tag == "n":
+                addr, _, port = val.rpartition(":")
+                if port.isdigit():
+                    rows.append((int(port), cmd, pid, is_loopback(addr)))
+        return rows
+    # Linux: process info only shows for sockets we own unless run as root
+    out = subprocess.run([SS, "-tlnpH"], capture_output=True, text=True, timeout=10).stdout
     for line in out.splitlines():
-        tag, val = line[0], line[1:]
-        if tag == "p":
-            pid = val
-        elif tag == "c":  # lsof escapes odd bytes, e.g. "Code\\x20Helper"
-            cmd = re.sub(r"\\x([0-9a-f]{2})", lambda m: chr(int(m[1], 16)), val)
-        elif tag == "n":
-            addr, _, port = val.rpartition(":")
-            if not port.isdigit():
-                continue
-            local = addr in ("127.0.0.1", "[::1]", "localhost")
-            row = ports.setdefault(int(port), {"port": int(port), "process": cmd, "pid": pid, "local": local})
-            row["local"] = row["local"] and local  # reachable from the network on any non-loopback bind
+        f = line.split()
+        if len(f) < 4:
+            continue
+        addr, _, port = f[3].rpartition(":")
+        if not port.isdigit():
+            continue
+        m = re.search(r'\(\("([^"]*)",pid=(\d+)', line)
+        rows.append((int(port), m[1] if m else "?", m[2] if m else "", is_loopback(addr)))
+    return rows
+
+
+def is_loopback(addr):
+    addr = addr.split("%")[0]  # ss shows 127.0.0.53%lo
+    return addr in ("[::1]", "localhost") or addr.startswith("127.")
+
+
+def list_listeners():
+    """TCP ports something on this machine is listening on, one row per port."""
+    ports = {}
+    for port, cmd, pid, local in raw_listeners():
+        row = ports.setdefault(port, {"port": port, "process": cmd, "pid": pid, "local": local})
+        row["local"] = row["local"] and local  # reachable from the network on any non-loopback bind
     try:
         act = port_activity()
     except (OSError, subprocess.SubprocessError):
