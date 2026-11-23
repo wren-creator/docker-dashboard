@@ -1,0 +1,32 @@
+# systemd unit for running the dashboard on boot.
+#
+# Install:
+#   sudo cp deploy/docker-dashboard.service /etc/systemd/system/docker-dashboard.service
+#   # edit User=, WorkingDirectory=, and the Environment= lines below to
+#   # match your box -- DASH_ALLOWED_HOSTS only matters if you're
+#   # deliberately exposing this past loopback, see README's security note
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now docker-dashboard.service
+#
+# Runs server.py directly rather than through start.sh -- systemd already
+# handles backgrounding and restart-on-crash, so start.sh's own PID-file
+# bookkeeping would just be redundant here.
+
+[Unit]
+Description=Docker dashboard
+After=docker.service network.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=CHANGE_ME
+WorkingDirectory=/home/CHANGE_ME/docker-dashboard
+Environment=DASH_HOST=0.0.0.0
+Environment=DASH_PORT=9999
+Environment=DASH_ALLOWED_HOSTS=CHANGE_ME
+ExecStart=/usr/bin/python3 /home/CHANGE_ME/docker-dashboard/server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

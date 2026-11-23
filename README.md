@@ -17,17 +17,19 @@ On a new machine: `git clone` the repo, make sure `docker` works from your shell
 
 ## How it works
 
-`server.py` is stdlib-only Python. It runs `docker ps -a` and serves JSON at `/api/containers`, `/api/ports` (from `lsof` on macOS, `ss` on Linux), and the page at `/`. It binds to 127.0.0.1 only.
+`server.py` is stdlib-only Python. It runs `docker ps -a` and serves JSON at `/api/containers`, `/api/ports` (from `lsof` on macOS, `ss` on Linux), and the page at `/`. It binds to 127.0.0.1 by default.
 
-Start/stop/restart go through `POST /api/containers/<id>/<action>`. Because any web page can fire requests at localhost, the server only accepts POSTs that carry an `X-Dashboard: 1` header (which forces a CORS preflight it never approves) and a localhost `Host` header (blocks DNS rebinding). It also only acts on container IDs it just listed from docker.
+Start/stop/restart go through `POST /api/containers/<id>/<action>`. Because any web page can fire requests at localhost, the server only accepts POSTs that carry an `X-Dashboard: 1` header (which forces a CORS preflight it never approves) and a recognized `Host` header (blocks DNS rebinding) — loopback values by default, plus whatever `DASH_ALLOWED_HOSTS` opts in. It also only acts on container IDs it just listed from docker.
 
 `start.sh` runs it in the background with a PID file (`dashboard.pid`) and logs to `dashboard.log`. It refuses to start if it's already running or if the port is taken. `stop.sh` kills it by PID and cleans up.
 
 ## Config
 
-Environment variables: `DASH_HOST` (default 127.0.0.1), `DASH_PORT` (default 9077), `DOCKER_BIN` (default: `docker` from `PATH`), plus `LSOF_BIN`, `NETSTAT_BIN` and `SS_BIN` if those tools live somewhere odd.
+Environment variables: `DASH_HOST` (default 127.0.0.1), `DASH_PORT` (default 9077), `DASH_ALLOWED_HOSTS` (comma-separated extra `Host` header values to accept — see below), `DOCKER_BIN` (default: `docker` from `PATH`), plus `LSOF_BIN`, `NETSTAT_BIN` and `SS_BIN` if those tools live somewhere odd.
 
-**Don't set `DASH_HOST=0.0.0.0`.** There's no login. The dashboard can stop and restart containers, so anyone who can reach the port can too. The localhost-only bind is the security model. The `Host` header check also rejects any address except localhost, so exposing it to the network wouldn't work cleanly anyway. If you need remote access, put it behind an SSH tunnel (`ssh -L 9077:localhost:9077 yourhost`).
+**Default is loopback-only, on purpose.** There's no login. The dashboard can stop and restart containers, so anyone who can reach the port can too. The `Host` header check also rejects any address except localhost by default, so just setting `DASH_HOST=0.0.0.0` wouldn't even work cleanly on its own. If you need remote access without accepting that tradeoff, put it behind an SSH tunnel instead (`ssh -L 9077:localhost:9077 yourhost`).
+
+**Deliberately exposing it to your LAN:** `./start.sh --lan <ip>` sets `DASH_HOST=0.0.0.0` and adds `<ip>` to the accepted `Host` values, so it's reachable at `http://<ip>:$DASH_PORT`. Only do this on a network you actually trust — anyone who can reach that port gets unauthenticated start/stop/restart control over every container on the box. The flag prints that warning every time, on purpose.
 
 ## Running on a headless Linux server
 
@@ -38,3 +40,14 @@ ssh -L 9077:localhost:9077 user@server-ip
 ```
 
 and open `http://localhost:9077`. The port **open** links point at `localhost` on whatever machine your browser is on, so they only work for ports you also forward.
+
+## Running on boot (systemd)
+
+```bash
+sudo cp deploy/docker-dashboard.service /etc/systemd/system/docker-dashboard.service
+# edit User=, WorkingDirectory=, and the Environment= lines to match your box
+sudo systemctl daemon-reload
+sudo systemctl enable --now docker-dashboard.service
+```
+
+Runs `server.py` directly instead of through `start.sh` — systemd already handles backgrounding and restart-on-crash, so `start.sh`'s own PID-file tracking would just duplicate that. Set `DASH_ALLOWED_HOSTS` in the unit only if you've deliberately decided to expose this past loopback (see the `--lan` note above) — leave it unset to stay loopback-only.

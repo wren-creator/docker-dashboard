@@ -2,7 +2,8 @@
 """Docker dashboard: one page showing every container, its image, and its ports.
 
 Stdlib only. Shells out to the docker CLI, serves JSON at /api/containers and
-the page at /. Binds to localhost so it is not exposed to the network.
+the page at /. Binds to localhost by default -- see README's security note
+before setting DASH_HOST to anything else.
 """
 import json
 import os
@@ -16,6 +17,12 @@ from pathlib import Path
 
 HOST = os.environ.get("DASH_HOST", "127.0.0.1")
 PORT = int(os.environ.get("DASH_PORT", "9077"))
+# Host header values accepted beyond the default loopback set -- comma
+# separated, e.g. "192.168.1.50,my-box.local". Only matters once DASH_HOST
+# is no longer 127.0.0.1; see the do_POST check and README's security note.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost", "[::1]"} | {
+    h.strip() for h in os.environ.get("DASH_ALLOWED_HOSTS", "").split(",") if h.strip()
+}
 IS_MAC = sys.platform == "darwin"
 
 
@@ -221,11 +228,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
-        # Localhost-only, but any web page can still fire requests at localhost.
-        # Require our custom header (forces a CORS preflight we never grant) and
-        # a Host we recognise (blocks DNS rebinding).
+        # Loopback-only by default, but any web page can still fire requests
+        # at localhost. Require our custom header (forces a CORS preflight we
+        # never grant) and a Host we recognise (blocks DNS rebinding) --
+        # ALLOWED_HOSTS stays loopback-only unless DASH_ALLOWED_HOSTS opted
+        # a specific address in.
         host = self.headers.get("Host", "").rsplit(":", 1)[0]
-        if self.headers.get("X-Dashboard") != "1" or host not in ("127.0.0.1", "localhost", "[::1]"):
+        if self.headers.get("X-Dashboard") != "1" or host not in ALLOWED_HOSTS:
             return self._send(403, b'{"ok": false, "error": "forbidden"}', "application/json")
         m = re.fullmatch(r"/api/containers/([0-9a-f]{12})/(\w+)", self.path)
         if not m or m[2] not in ACTIONS:
