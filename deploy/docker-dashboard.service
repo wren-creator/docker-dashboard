@@ -20,11 +20,11 @@ Requires=docker.service
 [Service]
 Type=simple
 User=CHANGE_ME
-WorkingDirectory=/home/CHANGE_ME/docker-dashboard
+WorkingDirectory=/home/CHANGE_ME/git/docker-dashboard
 Environment=DASH_HOST=0.0.0.0
 Environment=DASH_PORT=9999
 Environment=DASH_ALLOWED_HOSTS=CHANGE_ME
-ExecStart=/usr/bin/python3 /home/CHANGE_ME/docker-dashboard/server.py
+ExecStart=/usr/bin/python3 /home/CHANGE_ME/git/docker-dashboard/server.py
 Restart=on-failure
 RestartSec=5
 
